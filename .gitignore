@@ -1,0 +1,6 @@
+migration_engine/data/*.db
+migration_engine/logs/*.json
+__pycache__/
+*.pyc
+.env
+node_modules
