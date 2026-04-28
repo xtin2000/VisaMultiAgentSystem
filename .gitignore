@@ -1,6 +1,36 @@
-migration_engine/data/*.db
-migration_engine/logs/*.json
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Project data and run artifacts
+migration_engine/data/*.db
+migration_engine/logs/*.json
+
+# ADK & MCP local state
+.adk/
+
+# Secrets
 .env
-node_modules
+.env.*
+!.env.example
+
+# Node
+node_modules/
+
+# macOS / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Local-only stub
+VisaMultiAgentSystem

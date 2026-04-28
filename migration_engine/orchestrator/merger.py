@@ -1,9 +1,8 @@
-"""
-Merges individual AgentOutputs + resolved scores into a CountryProfile.
-"""
+"""Build a CountryProfile from per-agent outputs and resolved scores."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from schema.models import AgentOutput, CountryProfile, Evidence
 
 
@@ -20,5 +19,5 @@ def build(
         agent_outputs=agent_outputs,
         resolved_scores=resolved_scores,
         resolved_evidence=resolved_evidence,
-        merged_at=datetime.now(timezone.utc).isoformat(),
+        merged_at=datetime.now(UTC).isoformat(),
     )

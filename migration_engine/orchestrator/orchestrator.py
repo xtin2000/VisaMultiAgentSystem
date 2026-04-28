@@ -1,40 +1,25 @@
-"""
-Main orchestration logic.
-
-Flow:
-  1. For each country × active agent:
-       - Check cache → hit: deserialize; miss: agent.run() → cache.set()
-       - Log the result
-  2. For each country:
-       - conflict_resolver.resolve() → resolved_scores, resolved_evidence
-       - merger.build() → CountryProfile
-  3. ranker.rank() → sorted list of RankedResult
-  4. For each result: explainer.generate() → explanation_bullets
-  5. db.persist() + return (ranked_results, markdown_report)
-"""
+"""Run loop: collect agent outputs → resolve conflicts → rank → explain → persist."""
 from __future__ import annotations
 
 import importlib
-import json
 import os
 import uuid
 from dataclasses import asdict
-from datetime import datetime, timezone
-
-import anthropic
+from datetime import UTC, datetime
 
 import config
+import google.generativeai as genai
 from infra.cache import Cache, build_cache_key
 from infra.db import init_db, persist_rankings
 from infra.logger import Logger
-from orchestrator import conflict_resolver, merger, explainer
 from ranker.ranker import rank
 from reports.report_generator import render_markdown
 from schema.models import AgentOutput, Evidence
 
+from orchestrator import conflict_resolver, explainer, merger
+
 
 def _load_agent(agent_name: str, cache: Cache, logger: Logger):
-    """Dynamically import and instantiate an agent class from AGENT_REGISTRY."""
     class_path = config.AGENT_REGISTRY[agent_name]
     module_path, class_name = class_path.rsplit(".", 1)
     module = importlib.import_module(module_path)
@@ -48,12 +33,11 @@ def _deserialize_output(data: dict) -> AgentOutput:
 
 
 def _serialize_output(output: AgentOutput) -> dict:
-    d = asdict(output)
-    return d
+    return asdict(output)
 
 
 class Orchestrator:
-    def __init__(self, no_cache: bool = False):
+    def __init__(self, no_cache: bool = False) -> None:
         self.no_cache = no_cache
         init_db()
         self.cache = Cache()
@@ -69,15 +53,15 @@ class Orchestrator:
         active_agent_names = [a for a in config.AGENT_REGISTRY if a not in disabled_agents]
 
         run_id = str(uuid.uuid4())[:8]
-        ran_at = datetime.now(timezone.utc).isoformat()
+        ran_at = datetime.now(UTC).isoformat()
         logger = Logger(run_id)
-        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
 
-        logger.log("run_start", profile=profile, countries=countries,
-                   disabled_agents=disabled_agents, run_id=run_id)
+        logger.log(
+            "run_start", profile=profile, countries=countries,
+            disabled_agents=disabled_agents, run_id=run_id,
+        )
 
-        # --- Phase 1: collect agent outputs ---
-        # Structure: {country: {agent_name: AgentOutput}}
         all_outputs: dict[str, dict[str, AgentOutput]] = {c: {} for c in countries}
 
         for agent_name in active_agent_names:
@@ -102,27 +86,28 @@ class Orchestrator:
                             agent_name=agent_name, country=country, profile=profile,
                             domain_score=0.0, confidence=0.0, evidence=[],
                             caveats=[f"Agent failed: {exc}"], raw_data={},
-                            fetched_at=datetime.now(timezone.utc).isoformat(),
+                            fetched_at=datetime.now(UTC).isoformat(),
                         )
 
                 all_outputs[country][agent_name] = output
 
-        # --- Phase 2: merge per country ---
         country_profiles = []
         for country in countries:
             outputs = all_outputs[country]
             resolved_scores, resolved_evidence = conflict_resolver.resolve(outputs)
-            cp = merger.build(country, profile, outputs, resolved_scores, resolved_evidence)
-            country_profiles.append(cp)
+            country_profiles.append(
+                merger.build(country, profile, outputs, resolved_scores, resolved_evidence)
+            )
 
-        # --- Phase 3: rank ---
         ranked_results = rank(country_profiles, weights, disabled_agents)
 
-        # --- Phase 4: generate explanations ---
         for result in ranked_results:
-            result.explanation_bullets = explainer.generate(client, result)
+            try:
+                result.explanation_bullets = explainer.generate(result)
+            except Exception as exc:
+                logger.error("explainer", result.country, str(exc))
+                result.explanation_bullets = ["(Explanation unavailable — API quota exceeded)"]
 
-        # --- Phase 5: persist + report ---
         persist_rankings(run_id, ranked_results, ran_at)
         logger.log("run_complete", run_id=run_id, countries_ranked=len(ranked_results))
 

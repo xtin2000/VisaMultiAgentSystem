@@ -1,6 +1,4 @@
-"""
-Project-wide constants: countries, profiles, weights, agent registry.
-"""
+"""Project-wide constants: countries, profiles, weights, agent registry."""
 
 COUNTRIES: list[str] = [
     "Canada",
@@ -34,20 +32,19 @@ PROFILE_DISPLAY: dict[str, str] = {
 }
 
 DEFAULT_WEIGHTS: dict[str, float] = {
-    "visa": 0.30,
-    "job_market": 0.25,
+    "visa":          0.30,
+    "job_market":    0.25,
     "affordability": 0.25,
-    "english": 0.20,
+    "english":       0.20,
 }
 
-# Agent registry: maps agent_name → fully-qualified class path
 AGENT_REGISTRY: dict[str, str] = {
-    "visa": "agents.visa_agent.VisaAgent",
-    "job_market": "agents.job_market_agent.JobMarketAgent",
+    "visa":          "agents.visa_agent.VisaAgent",
+    "job_market":    "agents.job_market_agent.JobMarketAgent",
     "affordability": "agents.affordability_agent.AffordabilityAgent",
-    "english": "agents.english_agent.EnglishAgent",
+    "english":       "agents.english_agent.EnglishAgent",
 }
 
-MODEL = "claude-sonnet-4-6"
-CACHE_TTL_HOURS = 168   # 7 days
-STALE_MONTHS = 18       # Data older than this gets a confidence penalty
+MODEL = "gemini-2.0-flash"
+CACHE_TTL_HOURS = 168
+STALE_MONTHS = 18

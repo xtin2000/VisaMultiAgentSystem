@@ -1,6 +1,4 @@
-"""
-Report generation: markdown and terminal (rich) output.
-"""
+"""Render ranked results as Markdown or a Rich terminal table."""
 from __future__ import annotations
 
 from schema.models import RankedResult
@@ -13,7 +11,7 @@ def render_markdown(
     ran_at: str,
 ) -> str:
     lines = [
-        f"# Migration Feasibility Report",
+        "# Migration Feasibility Report",
         f"**Profile:** {profile.replace('_', ' ').title()}  ",
         f"**Run ID:** {run_id}  ",
         f"**Generated:** {ran_at}",
@@ -28,11 +26,9 @@ def render_markdown(
             f"## #{r.rank} — {r.country}",
             f"**Score:** {r.total_score:.1f}/100 | **Confidence:** {r.confidence_overall:.2f}{missing_note}",
             "",
+            "| Domain | Score | Weight |",
+            "|--------|-------|--------|",
         ]
-
-        # Score breakdown table
-        lines.append("| Domain | Score | Weight |")
-        lines.append("|--------|-------|--------|")
         for domain, score in r.score_breakdown.items():
             weight = r.weight_breakdown.get(domain, 0)
             lines.append(f"| {domain} | {score:.1f} | {weight:.0%} |")
@@ -40,64 +36,60 @@ def render_markdown(
 
         if r.explanation_bullets:
             lines.append("**Why this ranked here:**")
-            for bullet in r.explanation_bullets:
-                lines.append(f"- {bullet}")
+            lines += [f"- {bullet}" for bullet in r.explanation_bullets]
             lines.append("")
 
-        # Evidence citations
-        all_evidence = []
+        seen_urls: set[str] = set()
+        evidence_lines: list[str] = []
         for ev_list in r.country_profile.resolved_evidence.values():
-            all_evidence.extend(ev_list)
-
-        if all_evidence:
-            lines.append("**Sources:**")
-            seen_urls = set()
-            for ev in all_evidence:
+            for ev in ev_list:
                 if ev.url not in seen_urls:
                     seen_urls.add(ev.url)
-                    lines.append(f"- [{ev.title or ev.url}]({ev.url}) _(as of {ev.as_of})_")
+                    evidence_lines.append(f"- [{ev.title or ev.url}]({ev.url}) _(as of {ev.as_of})_")
+
+        if evidence_lines:
+            lines.append("**Sources:**")
+            lines += evidence_lines
             lines.append("")
 
-        lines.append("---")
-        lines.append("")
+        lines += ["---", ""]
 
     return "\n".join(lines)
 
 
 def render_terminal(results: list[RankedResult]) -> None:
-    """Print a rich table to the terminal."""
+    """Print a Rich table; fall back to plain text if Rich is unavailable."""
     try:
+        from rich import box
         from rich.console import Console
         from rich.table import Table
-        from rich import box
-
-        console = Console()
-        table = Table(box=box.ROUNDED, show_lines=True)
-        table.add_column("Rank", style="bold cyan", width=6)
-        table.add_column("Country", style="bold")
-        table.add_column("Score", justify="right")
-        table.add_column("Confidence", justify="right")
-        table.add_column("Why", max_width=60)
-        table.add_column("Missing", style="dim")
-
-        for r in results:
-            why = "\n".join(f"• {b}" for b in r.explanation_bullets[:3])
-            missing = ", ".join(r.missing_agents) or "—"
-            table.add_row(
-                f"#{r.rank}",
-                r.country,
-                f"{r.total_score:.1f}",
-                f"{r.confidence_overall:.2f}",
-                why,
-                missing,
-            )
-
-        console.print(table)
-
     except ImportError:
-        # Fallback if rich not installed
         for r in results:
             print(f"#{r.rank:2d}  {r.country:<15}  {r.total_score:5.1f}  conf={r.confidence_overall:.2f}")
             for b in r.explanation_bullets:
                 print(f"     • {b}")
             print()
+        return
+
+    console = Console()
+    table = Table(box=box.ROUNDED, show_lines=True)
+    table.add_column("Rank", style="bold cyan", width=6)
+    table.add_column("Country", style="bold")
+    table.add_column("Score", justify="right")
+    table.add_column("Confidence", justify="right")
+    table.add_column("Why", max_width=60)
+    table.add_column("Missing", style="dim")
+
+    for r in results:
+        why = "\n".join(f"• {b}" for b in r.explanation_bullets[:3])
+        missing = ", ".join(r.missing_agents) or "—"
+        table.add_row(
+            f"#{r.rank}",
+            r.country,
+            f"{r.total_score:.1f}",
+            f"{r.confidence_overall:.2f}",
+            why,
+            missing,
+        )
+
+    console.print(table)

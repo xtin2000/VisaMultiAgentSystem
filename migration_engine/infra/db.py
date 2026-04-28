@@ -1,9 +1,9 @@
-"""
-SQLite database setup and persistence for rankings and evidence logs.
-"""
-import sqlite3
+"""SQLite setup and persistence for rankings and evidence."""
+from __future__ import annotations
+
+import contextlib
 import json
-import os
+import sqlite3
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent.parent / "data" / "results.db"
@@ -18,7 +18,7 @@ def _get_conn(path: Path) -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Create all tables if they don't exist."""
+    """Create cache + rankings + evidence_log tables if missing."""
     with _get_conn(CACHE_DB_PATH) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS cache (
@@ -62,7 +62,6 @@ def init_db() -> None:
 
 
 def persist_rankings(run_id: str, ranked_results: list, ran_at: str) -> None:
-    from schema.models import RankedResult
     with _get_conn(DB_PATH) as conn:
         for r in ranked_results:
             conn.execute(
@@ -71,25 +70,22 @@ def persist_rankings(run_id: str, ranked_results: list, ran_at: str) -> None:
                     weight_used, missing_agents, confidence, ran_at)
                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    run_id, r.profile, r.country, r.rank,
-                    r.total_score,
+                    run_id, r.profile, r.country, r.rank, r.total_score,
                     json.dumps(r.score_breakdown),
                     json.dumps(r.weight_breakdown),
                     json.dumps(r.missing_agents),
                     r.confidence_overall,
                     ran_at,
-                )
+                ),
             )
             for agent_name, evidence_list in r.country_profile.resolved_evidence.items():
                 for ev in evidence_list:
-                    try:
+                    with contextlib.suppress(sqlite3.IntegrityError):
                         conn.execute(
                             """INSERT OR IGNORE INTO evidence_log
                                (run_id, country, agent_name, url, title, as_of,
                                 confidence, source_type, raw_excerpt)
                                VALUES (?,?,?,?,?,?,?,?,?)""",
                             (run_id, r.country, agent_name, ev.url, ev.title,
-                             ev.as_of, ev.confidence, ev.source_type, ev.raw_excerpt)
+                             ev.as_of, ev.confidence, ev.source_type, ev.raw_excerpt),
                         )
-                    except sqlite3.IntegrityError:
-                        pass

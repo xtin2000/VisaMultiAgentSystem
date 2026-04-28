@@ -1,27 +1,19 @@
 #!/usr/bin/env python3
-"""
-Migration Feasibility and Risk Engine — CLI entry point.
-
-Usage examples:
-  python main.py --profile "software engineer" --countries all --output markdown
-  python main.py --profile "software engineer" --countries "Canada,Germany" --output json
-  python main.py --profile "general professional" --disable-agent english --disable-agent visa
-  python main.py --profile "software engineer" --no-cache --output markdown
-"""
+"""Migration Feasibility and Risk Engine — CLI entry point."""
 from __future__ import annotations
+
 import json
 import os
 import sys
 from dataclasses import asdict
-from typing import Optional
+from pathlib import Path
+from typing import Annotated
 
 import typer
-from typing_extensions import Annotated
 
-# Ensure project root is on sys.path when run as a script
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, str(Path(__file__).parent))
 
-import config
+import config  # noqa: E402
 
 app = typer.Typer(add_completion=False, help="Migration Feasibility and Risk Engine")
 
@@ -51,20 +43,23 @@ def _resolve_countries(raw: str) -> list[str]:
 def run(
     profile: Annotated[str, typer.Option("--profile", "-p", help="software engineer | general professional | student-to-work pathway")],
     countries: Annotated[str, typer.Option("--countries", "-c", help="Comma-separated country names, or 'all'")] = "all",
-    disable_agent: Annotated[Optional[list[str]], typer.Option("--disable-agent", "-d", help="Agent to disable: visa|job_market|affordability|english")] = None,
+    disable_agent: Annotated[list[str] | None, typer.Option("--disable-agent", "-d", help="Agent to disable: visa|job_market|affordability|english")] = None,
     output: Annotated[str, typer.Option("--output", "-o", help="terminal | markdown | json")] = "terminal",
-    no_cache: Annotated[bool, typer.Option("--no-cache", help="Ignore cache, force fresh Claude calls")] = False,
-):
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        typer.echo("[error] ANTHROPIC_API_KEY environment variable is not set.", err=True)
+    no_cache: Annotated[bool, typer.Option("--no-cache", help="Ignore cache, force fresh model calls")] = False,
+) -> None:
+    if not os.environ.get("GOOGLE_API_KEY"):
+        typer.echo("[error] GOOGLE_API_KEY environment variable is not set.", err=True)
         raise typer.Exit(1)
 
     normalized_profile = _resolve_profile(profile)
     target_countries = _resolve_countries(countries)
     disabled = list(disable_agent) if disable_agent else []
 
-    typer.echo(f"Running: profile={normalized_profile}, countries={len(target_countries)}, "
-               f"disabled={disabled or 'none'}, cache={'off' if no_cache else 'on'}")
+    typer.echo(
+        f"Running: profile={normalized_profile}, countries={len(target_countries)}, "
+        f"disabled={disabled or 'none'}, cache={'off' if no_cache else 'on'}",
+        err=True,
+    )
 
     from orchestrator.orchestrator import Orchestrator
     from reports.report_generator import render_terminal

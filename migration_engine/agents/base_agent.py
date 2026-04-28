@@ -1,45 +1,79 @@
-"""
-Abstract base class for all domain agents.
-
-Every agent (job_market, visa, affordability, english) must:
-  1. Inherit BaseAgent
-  2. Implement run(country, profile) -> AgentOutput
-  3. Set self.agent_name to one of the registry keys in config.AGENT_REGISTRY
-
-The shared _call_claude_with_tools helper handles the agentic loop:
-  - Claude calls web_search (built-in) to gather evidence
-  - Claude then calls a custom "record_*_score" tool to submit structured output
-  - We intercept that tool_use block and return its input as validated data
-"""
+"""Abstract base class for all domain agents."""
 from __future__ import annotations
 
 import os
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
-
-import anthropic
+from datetime import UTC, datetime
+from typing import Any
 
 import config
+import google.generativeai as genai
 from schema.models import AgentOutput
 
 
-class BaseAgent(ABC):
-    agent_name: str  # Must be set by subclass
+def _to_python(value: Any) -> Any:
+    """Recursively convert protobuf / proto-plus values to plain Python types."""
+    if isinstance(value, (int, float, str, bool, type(None))):
+        return value
+    if hasattr(value, "items"):
+        return {k: _to_python(v) for k, v in value.items()}
+    if hasattr(value, "__iter__"):
+        return [_to_python(v) for v in value]
+    return value
 
-    def __init__(self, cache=None, logger=None):
+
+def _convert_schema(schema: dict) -> genai.protos.Schema:
+    """Convert a JSON-schema dict to a Gemini Schema proto."""
+    kwargs: dict[str, Any] = {}
+
+    json_type = schema.get("type", "string")
+    if isinstance(json_type, list):
+        non_null = [t for t in json_type if t != "null"]
+        json_type = non_null[0] if non_null else "string"
+
+    type_map = {
+        "string":  "STRING",
+        "number":  "NUMBER",
+        "integer": "INTEGER",
+        "boolean": "BOOLEAN",
+        "object":  "OBJECT",
+        "array":   "ARRAY",
+    }
+    kwargs["type"] = type_map.get(json_type, "STRING")
+
+    if "description" in schema:
+        kwargs["description"] = schema["description"]
+    if "enum" in schema:
+        kwargs["enum"] = [e for e in schema["enum"] if e is not None]
+    if "properties" in schema:
+        kwargs["properties"] = {k: _convert_schema(v) for k, v in schema["properties"].items()}
+    if "required" in schema:
+        kwargs["required"] = schema["required"]
+    if "items" in schema:
+        kwargs["items"] = _convert_schema(schema["items"])
+
+    return genai.protos.Schema(**kwargs)
+
+
+class BaseAgent(ABC):
+    """Every domain agent inherits this class and implements :meth:`run`."""
+
+    agent_name: str
+
+    def __init__(self, cache: Any = None, logger: Any = None) -> None:
         self.cache = cache
         self.logger = logger
-        self.client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
 
     @abstractmethod
     def run(self, country: str, profile: str) -> AgentOutput:
-        """Gather evidence and return a normalized AgentOutput."""
+        """Gather evidence for one country and return a normalized AgentOutput."""
         ...
 
     def _now_iso(self) -> str:
-        return datetime.now(timezone.utc).isoformat()
+        return datetime.now(UTC).isoformat()
 
-    def _call_claude_with_tools(
+    def _call_model_with_tools(
         self,
         system: str,
         user: str,
@@ -47,57 +81,44 @@ class BaseAgent(ABC):
         record_tool_name: str,
         max_iterations: int = 10,
     ) -> dict:
-        """
-        Run the agentic tool-use loop until Claude calls `record_tool_name`.
+        """Run a Gemini tool-use loop until the model calls ``record_tool_name``.
 
-        Claude will:
-          1. Call web_search (built-in) one or more times to gather data
-          2. Call `record_tool_name` with structured JSON as its final output
-
-        Returns the input dict of the record tool call.
-        Raises RuntimeError if the loop completes without a record call.
+        The model uses Google Search grounding to gather evidence, then submits
+        structured findings via the named function-call. Returns the call's input dict.
         """
-        messages = [{"role": "user", "content": user}]
-        # Include the built-in web_search tool alongside the custom record tool
-        all_tools = [{"type": "web_search_20250305", "name": "web_search"}] + tools
+        function_declarations = [
+            genai.protos.FunctionDeclaration(
+                name=tool["name"],
+                description=tool.get("description", ""),
+                parameters=_convert_schema(tool["input_schema"]),
+            )
+            for tool in tools
+            if "input_schema" in tool
+        ]
+
+        gemini_tools = [
+            genai.protos.Tool(google_search=genai.protos.GoogleSearch()),
+            genai.protos.Tool(function_declarations=function_declarations),
+        ]
+
+        model = genai.GenerativeModel(
+            config.MODEL,
+            system_instruction=system,
+            tools=gemini_tools,
+        )
+        chat = model.start_chat()
+        message = user
 
         for _ in range(max_iterations):
-            response = self.client.messages.create(
-                model=config.MODEL,
-                max_tokens=4096,
-                system=system,
-                tools=all_tools,
-                messages=messages,
+            response = chat.send_message(message)
+            for part in response.parts:
+                fn = getattr(part, "function_call", None)
+                if fn and fn.name == record_tool_name:
+                    return _to_python(fn.args)
+            message = (
+                f"You have gathered enough data. Now call the `{record_tool_name}` "
+                f"tool with your structured findings."
             )
-
-            # Scan for our record tool call
-            record_input = None
-            tool_results = []
-
-            for block in response.content:
-                if block.type == "tool_use":
-                    if block.name == record_tool_name:
-                        record_input = block.input
-                        # We don't need to continue the loop
-                        break
-                    # For web_search the SDK handles execution automatically
-                    # but we need to include tool_result blocks in the next turn
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": "",  # SDK fills actual search results
-                    })
-
-            if record_input is not None:
-                return record_input
-
-            if response.stop_reason == "end_turn":
-                break
-
-            # Append assistant turn + tool results and continue
-            messages.append({"role": "assistant", "content": response.content})
-            if tool_results:
-                messages.append({"role": "user", "content": tool_results})
 
         raise RuntimeError(
             f"Agent '{self.agent_name}' did not call '{record_tool_name}' "

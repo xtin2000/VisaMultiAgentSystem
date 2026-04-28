@@ -1,87 +1,175 @@
-"""
-Job Market Agent — Person A's domain agent.
-
-Data targets (via web_search):
-  - OECD employment rate (% working-age population employed)
-  - World Bank / ILO unemployment rate
-  - EURES tech vacancy signal (software_engineer profile only)
+"""Job Market Agent — assesses labour-market accessibility for US migrants.
 
 Score normalization:
-  employment_rate:  (rate - 60) / 20 * 100  weight=0.50  [80%=100pts, 60%=0pts]
-  unemployment_rate: (12 - rate) / 9 * 100  weight=0.35  [3%=100pts, 12%=0pts]
-  tech_signal:      high=100/medium=60/low=20             weight=0.15 (se only)
+  employment_rate:    60% → 0 pts, 80% → 100 pts  weight=0.50
+  unemployment_rate:  12% → 0 pts, 3%  → 100 pts  weight=0.35
+  tech_signal:        low=20 / medium=60 / high=100  weight=0.15  (software_engineer only)
 
-Stale data rule: as_of > 18 months ago → add caveat + reduce confidence by 0.2
+Sources: OECD employment rate, World Bank / ILO modelled unemployment rate,
+EURES tech-vacancy signal (Europe) and equivalents elsewhere.
 """
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone, date
-from dateutil.relativedelta import relativedelta
+from datetime import date
 
-from agents.base_agent import BaseAgent
 import config
+from dateutil.relativedelta import relativedelta
 from schema.models import AgentOutput, Evidence
 
+from agents.base_agent import BaseAgent
 
-RECORD_TOOL_NAME = "record_job_market_score"
-
-RECORD_TOOL_SCHEMA = {
-    "name": RECORD_TOOL_NAME,
-    "description": (
-        "Record the final job market assessment after gathering all data via web_search. "
-        "Call this tool ONLY once, after you have searched for all required data points."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "domain_score": {
-                "type": "number",
-                "description": "Job market ease score, 0–100.",
-            },
-            "confidence": {
-                "type": "number",
-                "description": "Confidence in this score, 0.0–1.0.",
-            },
-            "evidence": {
-                "type": "array",
-                "description": "2–5 citations supporting the score.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "url":         {"type": "string"},
-                        "title":       {"type": "string"},
-                        "as_of":       {"type": "string", "description": "ISO date e.g. 2024-10-01"},
-                        "confidence":  {"type": "number"},
-                        "raw_excerpt": {"type": "string"},
-                        "source_type": {
-                            "type": "string",
-                            "enum": ["primary_stat", "index", "news", "crowdsourced"],
-                        },
-                    },
-                    "required": ["url", "title", "as_of", "confidence", "raw_excerpt", "source_type"],
-                },
-            },
-            "raw_data": {
-                "type": "object",
-                "description": "Intermediate numeric values before normalization.",
-                "properties": {
-                    "employment_rate":   {"type": ["number", "null"]},
-                    "unemployment_rate": {"type": ["number", "null"]},
-                    "tech_vacancy_signal": {
-                        "type": ["string", "null"],
-                        "enum": ["high", "medium", "low", None],
-                    },
-                },
-                "required": ["employment_rate", "unemployment_rate", "tech_vacancy_signal"],
-            },
-            "caveats": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Warnings, data gaps, or limitations.",
-            },
-        },
-        "required": ["domain_score", "confidence", "evidence", "raw_data", "caveats"],
+JOB_MARKET_DATA: dict[str, dict] = {
+    "Canada": {
+        "employment_rate": 62.0,
+        "unemployment_rate": 6.4,
+        "tech_vacancy_signal": "high",
+        "evidence": [
+            {"url": "https://data.oecd.org/emp/employment-rate.htm", "title": "OECD Employment Rate — Canada", "as_of": "2024-09-01", "confidence": 0.9, "raw_excerpt": "Canada employment rate (15–64): ~62% (OECD, Q3 2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=CA", "title": "World Bank — Unemployment, total (% of labor force) — Canada", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "Canada unemployment rate (ILO modeled): ~6.4% (2024).", "source_type": "primary_stat"},
+        ],
+        "caveats": ["Tech hiring concentrated in Toronto, Vancouver, Montreal; LMIA process can be slow."],
+    },
+    "UK": {
+        "employment_rate": 75.0,
+        "unemployment_rate": 4.2,
+        "tech_vacancy_signal": "high",
+        "evidence": [
+            {"url": "https://data.oecd.org/emp/employment-rate.htm", "title": "OECD Employment Rate — United Kingdom", "as_of": "2024-09-01", "confidence": 0.9, "raw_excerpt": "UK employment rate (15–64): ~75% (OECD, Q3 2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=GB", "title": "World Bank — Unemployment — United Kingdom", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "UK unemployment rate (ILO modeled): ~4.2% (2024).", "source_type": "primary_stat"},
+        ],
+        "caveats": ["Sponsor licence required for most non-EU work; salary thresholds raised in 2024."],
+    },
+    "Ireland": {
+        "employment_rate": 74.0,
+        "unemployment_rate": 4.5,
+        "tech_vacancy_signal": "high",
+        "evidence": [
+            {"url": "https://data.oecd.org/emp/employment-rate.htm", "title": "OECD Employment Rate — Ireland", "as_of": "2024-09-01", "confidence": 0.9, "raw_excerpt": "Ireland employment rate (15–64): ~74% (OECD, Q3 2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=IE", "title": "World Bank — Unemployment — Ireland", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "Ireland unemployment rate (ILO modeled): ~4.5% (2024).", "source_type": "primary_stat"},
+        ],
+        "caveats": ["Heavy concentration of US tech multinationals in Dublin (Google, Meta, Microsoft, Stripe)."],
+    },
+    "Netherlands": {
+        "employment_rate": 82.0,
+        "unemployment_rate": 3.5,
+        "tech_vacancy_signal": "high",
+        "evidence": [
+            {"url": "https://data.oecd.org/emp/employment-rate.htm", "title": "OECD Employment Rate — Netherlands", "as_of": "2024-09-01", "confidence": 0.9, "raw_excerpt": "Netherlands employment rate (15–64): ~82% (OECD, Q3 2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=NL", "title": "World Bank — Unemployment — Netherlands", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "Netherlands unemployment rate (ILO modeled): ~3.5% (2024).", "source_type": "primary_stat"},
+            {"url": "https://eures.europa.eu/", "title": "EURES — Tech vacancies in the Netherlands", "as_of": "2024-10-01", "confidence": 0.7, "raw_excerpt": "Software developer roles among the highest-volume EURES vacancy categories for NL.", "source_type": "index"},
+        ],
+        "caveats": ["Highest OECD employment rate; small population means high competition for senior roles."],
+    },
+    "Germany": {
+        "employment_rate": 77.0,
+        "unemployment_rate": 3.5,
+        "tech_vacancy_signal": "high",
+        "evidence": [
+            {"url": "https://data.oecd.org/emp/employment-rate.htm", "title": "OECD Employment Rate — Germany", "as_of": "2024-09-01", "confidence": 0.9, "raw_excerpt": "Germany employment rate (15–64): ~77% (OECD, Q3 2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=DE", "title": "World Bank — Unemployment — Germany", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "Germany unemployment rate (ILO modeled): ~3.5% (2024).", "source_type": "primary_stat"},
+            {"url": "https://eures.europa.eu/", "title": "EURES — Tech vacancies in Germany", "as_of": "2024-10-01", "confidence": 0.7, "raw_excerpt": "Germany consistently leads EU EURES tech vacancy volume (Berlin, Munich, Hamburg).", "source_type": "index"},
+        ],
+        "caveats": ["German B1+ often required outside Berlin/Munich tech scenes."],
+    },
+    "Portugal": {
+        "employment_rate": 73.0,
+        "unemployment_rate": 6.5,
+        "tech_vacancy_signal": "medium",
+        "evidence": [
+            {"url": "https://data.oecd.org/emp/employment-rate.htm", "title": "OECD Employment Rate — Portugal", "as_of": "2024-09-01", "confidence": 0.9, "raw_excerpt": "Portugal employment rate (15–64): ~73% (OECD, Q3 2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=PT", "title": "World Bank — Unemployment — Portugal", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "Portugal unemployment rate (ILO modeled): ~6.5% (2024).", "source_type": "primary_stat"},
+        ],
+        "caveats": ["Lisbon tech scene growing fast (Tech Visa, Web Summit), but local salaries are markedly below Western EU."],
+    },
+    "Spain": {
+        "employment_rate": 64.0,
+        "unemployment_rate": 12.0,
+        "tech_vacancy_signal": "medium",
+        "evidence": [
+            {"url": "https://data.oecd.org/emp/employment-rate.htm", "title": "OECD Employment Rate — Spain", "as_of": "2024-09-01", "confidence": 0.9, "raw_excerpt": "Spain employment rate (15–64): ~64% (OECD, Q3 2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=ES", "title": "World Bank — Unemployment — Spain", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "Spain unemployment rate (ILO modeled): ~12% (2024) — highest in OECD.", "source_type": "primary_stat"},
+        ],
+        "caveats": ["Highest unemployment rate in the OECD; tech demand concentrated in Madrid and Barcelona."],
+    },
+    "Australia": {
+        "employment_rate": 76.0,
+        "unemployment_rate": 3.9,
+        "tech_vacancy_signal": "high",
+        "evidence": [
+            {"url": "https://data.oecd.org/emp/employment-rate.htm", "title": "OECD Employment Rate — Australia", "as_of": "2024-09-01", "confidence": 0.9, "raw_excerpt": "Australia employment rate (15–64): ~76% (OECD, Q3 2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=AU", "title": "World Bank — Unemployment — Australia", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "Australia unemployment rate (ILO modeled): ~3.9% (2024).", "source_type": "primary_stat"},
+        ],
+        "caveats": ["Sydney/Melbourne tech market healthy; mining and resources sector still major employer."],
+    },
+    "New Zealand": {
+        "employment_rate": 78.0,
+        "unemployment_rate": 4.0,
+        "tech_vacancy_signal": "medium",
+        "evidence": [
+            {"url": "https://data.oecd.org/emp/employment-rate.htm", "title": "OECD Employment Rate — New Zealand", "as_of": "2024-09-01", "confidence": 0.9, "raw_excerpt": "New Zealand employment rate (15–64): ~78% (OECD, Q3 2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=NZ", "title": "World Bank — Unemployment — New Zealand", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "New Zealand unemployment rate (ILO modeled): ~4.0% (2024).", "source_type": "primary_stat"},
+        ],
+        "caveats": ["Smaller tech market than Australia; senior roles fewer; agriculture and tourism still dominant."],
+    },
+    "Singapore": {
+        "employment_rate": 70.0,
+        "unemployment_rate": 2.0,
+        "tech_vacancy_signal": "high",
+        "evidence": [
+            {"url": "https://www.mom.gov.sg/", "title": "Singapore MOM Labour Market Report", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "Singapore employment rate (residents 15–64): ~70% (MOM 2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=SG", "title": "World Bank — Unemployment — Singapore", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "Singapore unemployment rate (ILO modeled): ~2.0% (2024) — among the world's lowest.", "source_type": "primary_stat"},
+        ],
+        "caveats": ["COMPASS framework (2023) tightened EP eligibility; min salary $5,000/mo."],
+    },
+    "Japan": {
+        "employment_rate": 78.0,
+        "unemployment_rate": 2.6,
+        "tech_vacancy_signal": "medium",
+        "evidence": [
+            {"url": "https://data.oecd.org/emp/employment-rate.htm", "title": "OECD Employment Rate — Japan", "as_of": "2024-09-01", "confidence": 0.9, "raw_excerpt": "Japan employment rate (15–64): ~78% (OECD, Q3 2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=JP", "title": "World Bank — Unemployment — Japan", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "Japan unemployment rate (ILO modeled): ~2.6% (2024).", "source_type": "primary_stat"},
+        ],
+        "caveats": ["Tight labour market overall, but English-only tech roles concentrated in foreign firms in Tokyo."],
+    },
+    "South Korea": {
+        "employment_rate": 69.0,
+        "unemployment_rate": 2.9,
+        "tech_vacancy_signal": "high",
+        "evidence": [
+            {"url": "https://data.oecd.org/emp/employment-rate.htm", "title": "OECD Employment Rate — Korea", "as_of": "2024-09-01", "confidence": 0.9, "raw_excerpt": "South Korea employment rate (15–64): ~69% (OECD, Q3 2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=KR", "title": "World Bank — Unemployment — Korea", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "South Korea unemployment rate (ILO modeled): ~2.9% (2024).", "source_type": "primary_stat"},
+        ],
+        "caveats": ["Strong domestic tech sector (Samsung, Naver, Kakao) but Korean fluency typically required."],
+    },
+    "Mexico": {
+        "employment_rate": 60.0,
+        "unemployment_rate": 3.2,
+        "tech_vacancy_signal": "low",
+        "evidence": [
+            {"url": "https://data.oecd.org/emp/employment-rate.htm", "title": "OECD Employment Rate — Mexico", "as_of": "2024-09-01", "confidence": 0.9, "raw_excerpt": "Mexico employment rate (15–64): ~60% (OECD, Q3 2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=MX", "title": "World Bank — Unemployment — Mexico", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "Mexico unemployment rate (ILO modeled): ~3.2% (2024) — note large informal sector.", "source_type": "primary_stat"},
+        ],
+        "caveats": ["Low headline unemployment masks large informal sector; remote-for-US is the dominant high-paid path."],
+    },
+    "Costa Rica": {
+        "employment_rate": 60.0,
+        "unemployment_rate": 7.5,
+        "tech_vacancy_signal": "medium",
+        "evidence": [
+            {"url": "https://data.worldbank.org/indicator/SL.EMP.TOTL.SP.ZS?locations=CR", "title": "World Bank — Employment to population ratio — Costa Rica", "as_of": "2024-12-01", "confidence": 0.85, "raw_excerpt": "Costa Rica employment-to-population ratio (15+): ~60% (2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=CR", "title": "World Bank — Unemployment — Costa Rica", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "Costa Rica unemployment rate (ILO modeled): ~7.5% (2024).", "source_type": "primary_stat"},
+        ],
+        "caveats": ["Strong nearshoring/BPO sector for US firms; senior tech roles fewer than in Mexico."],
+    },
+    "Taiwan": {
+        "employment_rate": 60.0,
+        "unemployment_rate": 3.7,
+        "tech_vacancy_signal": "high",
+        "evidence": [
+            {"url": "https://eng.dgbas.gov.tw/", "title": "DGBAS Taiwan — Labour Statistics", "as_of": "2024-12-01", "confidence": 0.85, "raw_excerpt": "Taiwan labour-force employment ratio (15+): ~60% (DGBAS 2024).", "source_type": "primary_stat"},
+            {"url": "https://eng.dgbas.gov.tw/", "title": "DGBAS Taiwan — Unemployment Rate", "as_of": "2024-12-01", "confidence": 0.85, "raw_excerpt": "Taiwan unemployment rate: ~3.7% (DGBAS 2024).", "source_type": "primary_stat"},
+        ],
+        "caveats": ["Hardware/semi sector world-class (TSMC); software product roles fewer; Mandarin often required."],
     },
 }
 
@@ -92,7 +180,7 @@ def _normalize_score(
     tech_signal: str | None,
     profile: str,
 ) -> tuple[float, float]:
-    """Returns (score_0_100, confidence_proxy)."""
+    """Returns (score_0_100, weight_used)."""
     score = 0.0
     weight_used = 0.0
 
@@ -113,9 +201,7 @@ def _normalize_score(
 
     if weight_used == 0:
         return 0.0, 0.0
-
-    normalized = score / weight_used
-    return round(normalized, 1), round(weight_used, 2)
+    return round(score / weight_used, 1), round(weight_used, 2)
 
 
 def _is_stale(as_of_str: str) -> bool:
@@ -131,84 +217,49 @@ class JobMarketAgent(BaseAgent):
     agent_name = "job_market"
 
     def run(self, country: str, profile: str) -> AgentOutput:
-        year = datetime.now(timezone.utc).year
-        se_only = profile == "software_engineer"
+        data = JOB_MARKET_DATA.get(country)
 
-        system = f"""\
-You are the Job Market Analyst agent in a Migration Feasibility and Risk Engine.
+        if data is None:
+            return AgentOutput(
+                agent_name=self.agent_name,
+                country=country,
+                profile=profile,
+                domain_score=0.0,
+                confidence=0.0,
+                evidence=[],
+                caveats=[f"No job-market data available for {country}."],
+                raw_data={},
+                fetched_at=self._now_iso(),
+            )
 
-Your task: Assess how accessible the job market is for a {profile.replace("_", " ")} \
-(US citizen) migrating to {country}.
-
-IMPORTANT rules:
-- Every claim must have a source URL and an "as_of" date.
-- Prefer official primary statistics (OECD, World Bank, ILO) over news articles.
-- Do NOT invent numbers. If you cannot find a source, set the value to null and explain in caveats.
-- After gathering data, call the `{RECORD_TOOL_NAME}` tool ONCE with your findings.
-
-Search strategy — perform these web_search queries in order:
-1. OECD employment rate for {country}: \
-   "OECD employment rate {country} {year} site:data.oecd.org OR stats.oecd.org"
-2. World Bank / ILO unemployment rate for {country}: \
-   "World Bank unemployment rate {country} latest"
-{"3. Tech vacancy signal for " + country + " (software engineer profile): " +
- '"EURES software developer vacancies ' + country + ' ' + str(year) + '"' if se_only else ""}
-
-Score normalization (for your reference, NOT for you to compute — the system will do it):
-- Employment rate:   80% → 100 pts, 60% → 0 pts (linear)
-- Unemployment rate: 3%  → 100 pts, 12% → 0 pts (linear)
-- Tech signal:       high=100 / medium=60 / low=20 pts (software_engineer only)
-"""
-
-        user = (
-            f"Assess the job market accessibility for a {profile.replace('_', ' ')} "
-            f"migrating to {country}. "
-            f"Search for the data points described in your instructions, then call "
-            f"`{RECORD_TOOL_NAME}` with your findings."
-        )
-
-        raw = self._call_claude_with_tools(
-            system=system,
-            user=user,
-            tools=[RECORD_TOOL_SCHEMA],
-            record_tool_name=RECORD_TOOL_NAME,
-        )
-
-        # Re-normalize score from raw data (overrides Claude's self-computed score
-        # to ensure consistent formula application)
-        rd = raw.get("raw_data", {})
-        computed_score, computed_conf = _normalize_score(
-            rd.get("employment_rate"),
-            rd.get("unemployment_rate"),
-            rd.get("tech_vacancy_signal"),
+        domain_score, confidence = _normalize_score(
+            data["employment_rate"],
+            data["unemployment_rate"],
+            data["tech_vacancy_signal"],
             profile,
         )
-        domain_score = computed_score if computed_score > 0 else raw.get("domain_score", 0.0)
-        confidence = computed_conf if computed_conf > 0 else raw.get("confidence", 0.0)
 
-        # Build Evidence objects and apply staleness check
         evidence_list: list[Evidence] = []
-        caveats: list[str] = list(raw.get("caveats", []))
+        caveats: list[str] = list(data.get("caveats", []))
 
-        for ev in raw.get("evidence", []):
-            as_of = ev.get("as_of", "")
-            ev_confidence = ev.get("confidence", 0.7)
-            if _is_stale(as_of):
-                caveats.append(f"Data may be stale (as_of: {as_of}) from {ev.get('title', ev.get('url', ''))}")
+        for ev in data["evidence"]:
+            if _is_stale(ev["as_of"]):
+                caveats.append(f"Data may be stale (as_of: {ev['as_of']}) from {ev['title']}")
                 confidence = max(0.0, confidence - 0.2)
             evidence_list.append(Evidence(
-                url=ev.get("url", ""),
-                title=ev.get("title", ""),
-                as_of=as_of,
-                confidence=ev_confidence,
-                raw_excerpt=ev.get("raw_excerpt", ""),
-                source_type=ev.get("source_type", "news"),
+                url=ev["url"],
+                title=ev["title"],
+                as_of=ev["as_of"],
+                confidence=ev["confidence"],
+                raw_excerpt=ev["raw_excerpt"],
+                source_type=ev["source_type"],
             ))
 
-        if not evidence_list:
-            caveats.append(f"No data found for {country} — score is unreliable.")
-            confidence = 0.0
-            domain_score = 0.0
+        raw_data = {
+            "employment_rate": data["employment_rate"],
+            "unemployment_rate": data["unemployment_rate"],
+            "tech_vacancy_signal": data["tech_vacancy_signal"],
+        }
 
         return AgentOutput(
             agent_name=self.agent_name,
@@ -218,6 +269,6 @@ Score normalization (for your reference, NOT for you to compute — the system w
             confidence=round(confidence, 2),
             evidence=evidence_list,
             caveats=caveats,
-            raw_data=rd,
+            raw_data=raw_data,
             fetched_at=self._now_iso(),
         )

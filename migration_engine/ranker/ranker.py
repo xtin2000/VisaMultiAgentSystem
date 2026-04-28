@@ -1,10 +1,8 @@
-"""
-Weighted scoring and ranking.
+"""Weighted ranking with ablation support.
 
-Default weights: visa=30%, job_market=25%, affordability=25%, english=20%
-
-Ablation: pass disabled_agents=['english'] to drop that domain and renormalize.
-Missing agent output (confidence == 0): flagged in missing_agents, excluded from score.
+Default weights live in :data:`config.DEFAULT_WEIGHTS`. Disabling agents drops their
+weight and renormalizes the remainder. Agents that returned confidence 0 are
+listed in ``missing_agents`` and excluded from both score and confidence.
 """
 from __future__ import annotations
 
@@ -20,7 +18,6 @@ def rank(
     disabled_agents = disabled_agents or []
     base_weights = weights or config.DEFAULT_WEIGHTS
 
-    # Drop disabled agents and renormalize so weights sum to 1.0
     active_weights = {k: v for k, v in base_weights.items() if k not in disabled_agents}
     total = sum(active_weights.values())
     if total == 0:
@@ -45,22 +42,24 @@ def rank(
             conf_components.append(agent_out.confidence * w)
             effective_weight_total += w
 
-        # Rescale score if some agents were missing
-        if effective_weight_total > 0 and effective_weight_total < 1.0:
+        # If some agents missed, rescale remaining weights so the score still
+        # spans 0–100 instead of being capped by the missing weight share.
+        if 0 < effective_weight_total < 1.0:
             score = score / effective_weight_total
 
-        overall_conf = sum(conf_components) / effective_weight_total if effective_weight_total > 0 else 0.0
+        overall_conf = (
+            sum(conf_components) / effective_weight_total
+            if effective_weight_total > 0 else 0.0
+        )
 
         results.append(RankedResult(
-            rank=0,  # assigned after sort
+            rank=0,
             country=cp.country,
             profile=cp.profile,
             total_score=round(score, 2),
-            score_breakdown={
-                k: cp.resolved_scores.get(k, 0.0) for k in normalized_weights
-            },
+            score_breakdown={k: cp.resolved_scores.get(k, 0.0) for k in normalized_weights},
             weight_breakdown=normalized_weights,
-            explanation_bullets=[],  # filled by explainer
+            explanation_bullets=[],
             missing_agents=missing,
             confidence_overall=round(overall_conf, 3),
             country_profile=cp,
@@ -69,5 +68,4 @@ def rank(
     results.sort(key=lambda r: r.total_score, reverse=True)
     for i, r in enumerate(results, 1):
         r.rank = i
-
     return results

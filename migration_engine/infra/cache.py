@@ -1,21 +1,19 @@
-"""
-SQLite-backed cache for agent outputs with TTL support.
-"""
+"""SQLite-backed cache for agent outputs with TTL support."""
 from __future__ import annotations
+
 import json
-import sqlite3
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
+
 from infra.db import CACHE_DB_PATH, _get_conn
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def build_cache_key(agent_name: str, country: str, profile: str) -> str:
-    """Week-granular cache key so both collaborators share results within a work week."""
-    iso = datetime.now(timezone.utc).isocalendar()
+    """Week-granular cache key so collaborators share results within a work week."""
+    iso = datetime.now(UTC).isocalendar()
     week_label = f"{iso.year}-W{iso.week:02d}"
     safe_country = country.lower().replace(" ", "_")
     return f"{agent_name}|{safe_country}|{profile}|{week_label}"
@@ -25,14 +23,14 @@ class Cache:
     def get(self, key: str) -> dict | None:
         with _get_conn(CACHE_DB_PATH) as conn:
             row = conn.execute(
-                "SELECT value, fetched_at, ttl_hours FROM cache WHERE key=?", (key,)
+                "SELECT value, fetched_at, ttl_hours FROM cache WHERE key=?", (key,),
             ).fetchone()
         if row is None:
             return None
         fetched = datetime.fromisoformat(row["fetched_at"])
-        age_hours = (datetime.now(timezone.utc) - fetched).total_seconds() / 3600
+        age_hours = (datetime.now(UTC) - fetched).total_seconds() / 3600
         if age_hours > row["ttl_hours"]:
-            return None  # stale
+            return None
         return json.loads(row["value"])
 
     def set(self, key: str, value: dict, ttl_hours: int = 168) -> None:
