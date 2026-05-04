@@ -183,6 +183,18 @@ VISA_DATA: dict[str, dict] = {
         ],
         "caveats": ["Digital Nomad Visa requires proof of $3,000/month remote income. Local job market is small."],
     },
+    "France": {
+        "henley_access": "visa_free",
+        "processing_months": 3,
+        "sponsorship_required": "sometimes",
+        "pathway_count": 4,  # Talent Passport, Tech Visa, Salaried, Liberal Profession
+        "pathways": ["Talent Passport (Passeport Talent)", "French Tech Visa", "Salaried Worker Visa", "Liberal Profession (Profession Libérale)"],
+        "evidence": [
+            {"url": "https://www.henleyglobal.com/passport-index", "title": "Henley Passport Index 2025", "as_of": "2025-01-01", "confidence": 0.9, "raw_excerpt": "US passport holders have visa-free access to France (Schengen area).", "source_type": "index"},
+            {"url": "https://france-visas.gouv.fr/en/working-in-france", "title": "Working in France — France-Visas.gouv.fr", "as_of": "2025-01-15", "confidence": 0.95, "raw_excerpt": "The Talent Passport multi-year residence permit covers qualified employees, founders, researchers, and investors.", "source_type": "primary_stat"},
+        ],
+        "caveats": ["Talent Passport is the most accessible route for skilled workers; standard salaried visas require employer sponsorship and DREETS approval."],
+    },
     "Taiwan": {
         "henley_access": "visa_free",
         "processing_months": 3,

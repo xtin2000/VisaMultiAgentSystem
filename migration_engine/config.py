@@ -8,6 +8,7 @@ COUNTRIES: list[str] = [
     "Germany",
     "Portugal",
     "Spain",
+    "France",
     "Australia",
     "New Zealand",
     "Singapore",

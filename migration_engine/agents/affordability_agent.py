@@ -139,6 +139,15 @@ AFFORDABILITY_DATA: dict[str, dict] = {
         ],
         "caveats": ["Imported goods (cars, electronics) carry steep tariffs; produce and services are cheap."],
     },
+    "France": {
+        "oecd_price_level": 104.0,
+        "numbeo_col_index": 62.0,
+        "evidence": [
+            {"url": "https://data.oecd.org/conversion/price-level-indices.htm", "title": "OECD Price Level Indices — France", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "France price level index: ~104 (OECD=100).", "source_type": "primary_stat"},
+            {"url": "https://www.numbeo.com/cost-of-living/country_result.jsp?country=France", "title": "Numbeo — France cost of living", "as_of": "2025-01-01", "confidence": 0.5, "raw_excerpt": "Numbeo COL index for France ~62 (NYC=100).", "source_type": "crowdsourced"},
+        ],
+        "caveats": ["Paris is markedly more expensive than the national average; provincial cities (Lyon, Toulouse, Bordeaux) are notably cheaper."],
+    },
     "Taiwan": {
         "oecd_price_level": 72.0,
         "numbeo_col_index": 56.0,

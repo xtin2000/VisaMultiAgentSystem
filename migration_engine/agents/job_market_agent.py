@@ -161,6 +161,17 @@ JOB_MARKET_DATA: dict[str, dict] = {
         ],
         "caveats": ["Strong nearshoring/BPO sector for US firms; senior tech roles fewer than in Mexico."],
     },
+    "France": {
+        "employment_rate": 68.0,
+        "unemployment_rate": 7.3,
+        "tech_vacancy_signal": "medium",
+        "evidence": [
+            {"url": "https://data.oecd.org/emp/employment-rate.htm", "title": "OECD Employment Rate — France", "as_of": "2024-09-01", "confidence": 0.9, "raw_excerpt": "France employment rate (15–64): ~68% (OECD, Q3 2024).", "source_type": "primary_stat"},
+            {"url": "https://data.worldbank.org/indicator/SL.UEM.TOTL.ZS?locations=FR", "title": "World Bank — Unemployment — France", "as_of": "2024-12-01", "confidence": 0.9, "raw_excerpt": "France unemployment rate (ILO modeled): ~7.3% (2024).", "source_type": "primary_stat"},
+            {"url": "https://eures.europa.eu/", "title": "EURES — Tech vacancies in France", "as_of": "2024-10-01", "confidence": 0.7, "raw_excerpt": "France tech vacancies concentrated in Paris (Station F ecosystem); volume below Germany and Netherlands.", "source_type": "index"},
+        ],
+        "caveats": ["Tech market concentrated in Paris; French B2+ typically required outside multinationals."],
+    },
     "Taiwan": {
         "employment_rate": 60.0,
         "unemployment_rate": 3.7,

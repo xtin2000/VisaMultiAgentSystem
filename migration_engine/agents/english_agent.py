@@ -161,6 +161,16 @@ ENGLISH_DATA: dict[str, dict] = {
         ],
         "caveats": ["Tourism and BPO sectors are English-friendly; other local employment generally requires Spanish."],
     },
+    "France": {
+        "native_english": False,
+        "epi_band": "moderate",
+        "epi_rank": 43,
+        "needs_local_language_for_work": True,
+        "evidence": [
+            {"url": "https://www.ef.com/wwen/epi/", "title": "EF EPI 2024 — France 'Moderate' band", "as_of": "2024-11-01", "confidence": 0.85, "raw_excerpt": "France scores in the 'Moderate' proficiency band on the EF EPI 2024.", "source_type": "index"},
+        ],
+        "caveats": ["French is required for most work outside Paris-based multinationals and the English-friendly tech scene at Station F."],
+    },
     "Taiwan": {
         "native_english": False,
         "epi_band": "moderate",
