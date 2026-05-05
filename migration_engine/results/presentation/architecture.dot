@@ -1,0 +1,101 @@
+// Migration Feasibility & Risk Engine — architecture diagram
+// Render with:  dot -Tpng architecture.dot -o architecture.png
+//        or:    dot -Tsvg architecture.dot -o architecture.svg
+digraph migration_engine {
+    rankdir=TB;
+    bgcolor="white";
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11];
+    edge [fontname="Helvetica", fontsize=9];
+
+    // ── Entry points ──
+    {
+        rank=same;
+        cli      [label="main.py\n(CLI)",          fillcolor="#E8F0FE", color="#1A73E8"];
+        mcp      [label="mcp_server.py\n(MCP tool)", fillcolor="#E8F0FE", color="#1A73E8"];
+        chat     [label="adk_agent.py\n(chat front-end)", fillcolor="#E8F0FE", color="#1A73E8"];
+    }
+
+    // ── Orchestrator ──
+    orch [label="Orchestrator\n(5-phase run loop)",
+          fillcolor="#FEF7E0", color="#F9AB00", fontsize=12, fontname="Helvetica-Bold"];
+
+    // ── Domain agents ──
+    {
+        rank=same;
+        visa  [label="VisaAgent\nHenley + gov portals",            fillcolor="#E6F4EA", color="#188038"];
+        job   [label="JobMarketAgent\nOECD + World Bank + EURES",  fillcolor="#E6F4EA", color="#188038"];
+        aff   [label="AffordabilityAgent\nOECD PPP + Numbeo",      fillcolor="#E6F4EA", color="#188038"];
+        eng   [label="EnglishAgent\nEF EPI 2024",                  fillcolor="#E6F4EA", color="#188038"];
+    }
+
+    // ── Shared schema ──
+    schema [label="schema/models.py\nAgentOutput · Evidence · CountryProfile · RankedResult",
+            fillcolor="#F3E8FD", color="#9334E6", shape=note];
+
+    // ── Coordination layer ──
+    {
+        rank=same;
+        conflict [label="conflict_resolver.py\nprimary_stat > index > news > crowd",
+                  fillcolor="#FCE8E6", color="#D93025"];
+        merger   [label="merger.py\nbuild CountryProfile",
+                  fillcolor="#FCE8E6", color="#D93025"];
+    }
+
+    // ── Cooperation layer ──
+    ranker [label="ranker.py\nweighted ranking + ablation renormalization",
+            fillcolor="#FFF3E0", color="#E37400", fontsize=12, fontname="Helvetica-Bold"];
+
+    // ── Output layer ──
+    {
+        rank=same;
+        explainer [label="explainer.py\ndeterministic 'why this rank' bullets", fillcolor="#E0F2F1", color="#00695C"];
+        report    [label="report_generator.py\nmarkdown + Rich terminal",       fillcolor="#E0F2F1", color="#00695C"];
+    }
+
+    // ── Persistence ──
+    {
+        rank=same;
+        cache  [label="infra/cache.py\nSQLite (weekly TTL)",       fillcolor="#F5F5F5", color="#5F6368"];
+        db     [label="infra/db.py\nSQLite rankings + evidence",   fillcolor="#F5F5F5", color="#5F6368"];
+        logger [label="infra/logger.py\nper-run JSON",             fillcolor="#F5F5F5", color="#5F6368"];
+    }
+
+    // ── Edges ──
+    cli  -> orch [label="rank()"];
+    mcp  -> orch [label="rank_countries()"];
+    chat -> mcp  [label="MCP/stdio"];
+
+    orch -> visa;
+    orch -> job;
+    orch -> aff;
+    orch -> eng;
+
+    visa -> schema [style=dashed, label="emits"];
+    job  -> schema [style=dashed];
+    aff  -> schema [style=dashed];
+    eng  -> schema [style=dashed];
+
+    schema -> conflict [style=dashed, label="reads"];
+    conflict -> merger;
+    merger -> ranker;
+    ranker -> explainer;
+    explainer -> report;
+
+    orch -> cache  [style=dotted, label="hit/miss"];
+    orch -> db     [style=dotted, label="persist"];
+    orch -> logger [style=dotted, label="log"];
+
+    // ── Legend ──
+    subgraph cluster_legend {
+        label="Multi-agent properties";
+        style="rounded,dashed";
+        color="#5F6368";
+        fontname="Helvetica";
+        fontsize=10;
+        legend_auto [label="Autonomy\n(each agent stands alone)", fillcolor="#E6F4EA", color="#188038", fontsize=9];
+        legend_comm [label="Communication\n(shared schema)",      fillcolor="#F3E8FD", color="#9334E6", fontsize=9];
+        legend_coord [label="Coordination\n(conflict resolver)",  fillcolor="#FCE8E6", color="#D93025", fontsize=9];
+        legend_coop [label="Cooperation\n(ranker + explainer)",   fillcolor="#FFF3E0", color="#E37400", fontsize=9];
+        legend_auto -> legend_comm -> legend_coord -> legend_coop [style=invis];
+    }
+}

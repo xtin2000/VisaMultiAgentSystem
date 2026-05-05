@@ -24,7 +24,7 @@ toolset = MCPToolset(
 
 root_agent = Agent(
     name="visa_ranker",
-    model="gemini-2.0-flash",
+    model="gemini-2.5-flash",
     instruction="""You are a Migration Feasibility Analyst that helps US citizens evaluate
 countries for relocation.
 
